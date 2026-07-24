@@ -22,9 +22,9 @@ python3 wheel_speed_sensor.py
 
 If a magnet visibly triggers a sensor (e.g. its onboard LED lights up) but
 the script never registers it, run `detect_magnet.py` first — it polls a
-single sensor's pin directly and rules out GPIO backend/edge-detection
-issues before you debug the RPM logic. Both scripts use `gpiozero` on the
-`lgpio` backend rather than `RPi.GPIO`, since `RPi.GPIO`'s interrupt-driven
-edge detection relies on the legacy sysfs GPIO interface that current
-Raspberry Pi OS (Bookworm) removed, which is the usual cause of a sensor
-that clearly works but produces no pulses in code.
+single sensor's pin directly. Both scripts read `GPIO.input()` in a plain
+polling loop rather than using interrupts/edge-detection callbacks
+(`RPi.GPIO`'s `add_event_detect()` and `gpiozero`'s `when_pressed` both
+depend on the kernel's GPIO event subsystem, which can silently fail to
+deliver edges on some setups). Polling is the same mechanism as Arduino's
+`digitalRead()` in a loop, so it has no dependency on interrupt delivery.
