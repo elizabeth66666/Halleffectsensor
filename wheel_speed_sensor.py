@@ -41,7 +41,7 @@ import RPi.GPIO as GPIO
 SENSOR_A_PIN = 17
 SENSOR_B_PIN = 27
 
-MAGNETS_PER_REV = 4          # number of equally-spaced magnets on the wheel
+MAGNETS_PER_REV = 1          # number of equally-spaced magnets on the wheel
 WHEEL_DIAMETER_M = 0.65      # wheel diameter in metres, for linear speed
 
 DEBOUNCE_S = 0.002           # ignore a new falling edge on the same pin sooner than this
