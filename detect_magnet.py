@@ -19,7 +19,7 @@ import time
 
 from gpiozero import Button
 
-SENSOR_PIN = 17  # change to test the other sensor (e.g. 27)
+SENSOR_PIN = 23  # change to test the other sensor (e.g. 27)
 
 
 def main():
