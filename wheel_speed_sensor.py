@@ -20,7 +20,19 @@ Sensor A SIG -> GPIO17 (pin 11)
 Sensor B SIG -> GPIO27 (pin 13)
 VCC          -> 3V3 or 5V (check module silkscreen)
 GND          -> GND
+
+If magnets aren't registering even though the sensor visibly toggles (e.g.
+its own onboard LED lights up), run detect_magnet.py first — this uses the
+same gpiozero/lgpio backend and polls the pin directly, which rules out
+edge-detection/backend issues before debugging the RPM logic below.
 """
+
+import os
+
+# Force the modern lgpio backend: RPi.GPIO's add_event_detect() relies on
+# the legacy sysfs GPIO interface, which Raspberry Pi OS Bookworm removed —
+# a common reason edges are silently never delivered on a Pi 4.
+os.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
 
 import signal
 import sys
@@ -28,7 +40,7 @@ import time
 from collections import deque
 from threading import Lock
 
-import RPi.GPIO as GPIO
+from gpiozero import Button
 
 # ---- Configuration ---------------------------------------------------------
 
@@ -38,7 +50,7 @@ SENSOR_B_PIN = 27
 MAGNETS_PER_REV = 4          # number of equally-spaced magnets on the wheel
 WHEEL_DIAMETER_M = 0.65      # wheel diameter in metres, for linear speed
 
-DEBOUNCE_MS = 2              # ignore edges on the same pin closer than this
+DEBOUNCE_S = 0.002           # ignore edges on the same pin closer than this
 STALE_TIMEOUT_S = 2.0        # report 0 speed if no pulses arrive within this
 PRINT_INTERVAL_S = 0.5
 
@@ -48,26 +60,26 @@ PULSES_PER_REV = MAGNETS_PER_REV * 2
 # ---- Shared state (written by GPIO callbacks, read by the main loop) ------
 
 _lock = Lock()
-_edge_log = deque(maxlen=32)   # recent (channel, timestamp) edges, for direction + instant speed
+_edge_log = deque(maxlen=32)   # recent (pin, timestamp) edges, for direction + instant speed
 _pulse_count = 0               # total pulses since the last window snapshot
 _last_edge_time = None
 
 
-def _on_edge(channel):
+def _on_edge(pin_number):
     global _pulse_count, _last_edge_time
     now = time.monotonic()
     with _lock:
         _pulse_count += 1
         _last_edge_time = now
-        _edge_log.append((channel, now))
+        _edge_log.append((pin_number, now))
 
 
-def _setup_gpio():
-    GPIO.setmode(GPIO.BCM)
-    for pin in (SENSOR_A_PIN, SENSOR_B_PIN):
-        # KY-003 output is open-collector; PUD_UP gives a clean HIGH at rest.
-        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.add_event_detect(pin, GPIO.FALLING, callback=_on_edge, bouncetime=DEBOUNCE_MS)
+def _make_sensor(pin_number):
+    # KY-003 output is open-collector; pull_up=True gives a clean HIGH at
+    # rest and "pressed" (active) when a magnet pulls the line LOW.
+    button = Button(pin_number, pull_up=True, bounce_time=DEBOUNCE_S)
+    button.when_pressed = lambda: _on_edge(pin_number)
+    return button
 
 
 def _snapshot_pulse_count():
@@ -88,12 +100,12 @@ def _direction():
     with _lock:
         if len(_edge_log) < 2:
             return None
-        (chan_prev, _), (chan_last, _) = _edge_log[-2], _edge_log[-1]
-    if chan_prev == chan_last:
+        (pin_prev, _), (pin_last, _) = _edge_log[-2], _edge_log[-1]
+    if pin_prev == pin_last:
         return None
-    if chan_prev == SENSOR_A_PIN and chan_last == SENSOR_B_PIN:
+    if pin_prev == SENSOR_A_PIN and pin_last == SENSOR_B_PIN:
         return "forward"
-    if chan_prev == SENSOR_B_PIN and chan_last == SENSOR_A_PIN:
+    if pin_prev == SENSOR_B_PIN and pin_last == SENSOR_A_PIN:
         return "reverse"
     return None
 
@@ -127,10 +139,12 @@ def _linear_speed_ms(rpm):
 
 
 def main():
-    _setup_gpio()
+    sensor_a = _make_sensor(SENSOR_A_PIN)
+    sensor_b = _make_sensor(SENSOR_B_PIN)
 
     def cleanup(*_args):
-        GPIO.cleanup()
+        sensor_a.close()
+        sensor_b.close()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, cleanup)
@@ -159,7 +173,8 @@ def main():
                 f"({speed_ms * 3.6:5.2f} km/h)  Direction: {direction}"
             )
     finally:
-        GPIO.cleanup()
+        sensor_a.close()
+        sensor_b.close()
 
 
 if __name__ == "__main__":
